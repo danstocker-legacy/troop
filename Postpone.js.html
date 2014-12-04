@@ -25,19 +25,13 @@
     
     <section>
         <article>
-            <pre class="prettyprint source"><code>/**
- * Postponed Property Definition.
- *
- * API to add properties to objects so that they won't get evaluated until
- * first access.
- */
-/*global dessert, troop */
+            <pre class="prettyprint source"><code>/*global dessert, troop */
 (function () {
     "use strict";
 
     var hOP = Object.prototype.hasOwnProperty,
         slice = Array.prototype.slice,
-        splice = Array.prototype.splice;
+        validators = dessert.validators;
 
     dessert.addTypes(/** @lends dessert */{
         /**
@@ -88,22 +82,25 @@
                 .isString(propertyName, "Invalid property name")
                 .isFunction(generator, "Invalid generator function");
 
-            // checking whether property is already defined
-            if (hOP.call(host, propertyName)) {
-                return;
-            }
+            var Amendments = troop.AmendUtils,
+                propertyDescriptorBefore = Object.getOwnPropertyDescriptor(host, propertyName),
+                propertyDescriptorAfter,
+                generatorArguments = slice.call(arguments);
 
             // preparing generator argument list
-            var generatorArguments = slice.call(arguments);
-            splice.call(generatorArguments, 2, 1);
+            generatorArguments.splice(2, 1);
 
             // placing class placeholder on namespace as getter
-            Object.defineProperty(host, propertyName, {
-                get: function getter () {
+            propertyDescriptorAfter = {
+                get: function getter() {
+                    // NOTE: some browsers (like Firefox 11) can't handle the configurable property setting,
+                    //       so remove the temporary property before overriding it
+                    delete host[propertyName];
+
                     // obtaining property value
                     var value = generator.apply(this, generatorArguments),
                         amendments = getter.amendments,
-                        i, amendment;
+                        propertyDescriptor;
 
                     if (typeof value !== 'undefined') {
                         // generator returned a property value
@@ -115,18 +112,19 @@
                             configurable: false
                         });
                     } else {
-                        // no return value
-                        // generator supposedly assigned value to property
-                        value = host[propertyName];
+                        // fetching descriptor for resolved property
+                        // when descriptor is still a getter-setter, the postpone has not been resolved correctly
+                        propertyDescriptor = Object.getOwnPropertyDescriptor(host, propertyName);
+
+                        if (!validators.isSetterGetterDescriptor(propertyDescriptor)) {
+                            // no return value
+                            // generator supposedly assigned value to property
+                            value = host[propertyName];
+                        }
                     }
 
                     // applying amendments
-                    if (amendments) {
-                        for (i = 0; i &lt; amendments.length; i++) {
-                            amendment = amendments[i];
-                            amendment.modifier.apply(this, amendment.args);
-                        }
-                    }
+                    Amendments.applyAmendments(propertyDescriptorAfter, amendments);
 
                     return value;
                 },
@@ -143,13 +141,19 @@
 
                 enumerable  : true,
                 configurable: true  // must be configurable in order to be re-defined
-            });
+            };
+
+            // copying over amendments from old getter-setter
+            Amendments.setAmendments(propertyDescriptorAfter, Amendments.getAmendments(propertyDescriptorBefore));
+
+            Object.defineProperty(host, propertyName, propertyDescriptorAfter);
         },
 
         /**
          * Applies a modifier to the postponed property to be called AFTER the property is resolved.
          * Amendments are resolved in the order they were applied. Amendments should not expect other amendments
          * to be applied.
+         * Amendments may be applied before the corresponding .postpone().
          * @param {object} host Host object.
          * @param {string} propertyName Property name.
          * @param {function} modifier Amends property value. Arguments: host object, property name,
@@ -172,29 +176,31 @@
                 .isFunction(modifier, "Invalid generator function");
 
             var modifierArguments = slice.call(arguments),
-                propertyDescriptor = Object.getOwnPropertyDescriptor(host, propertyName),
-                propertyGetter,
-                amendments;
+                propertyDescriptor = Object.getOwnPropertyDescriptor(host, propertyName);
 
             // removing modifier from argument list
-            splice.call(modifierArguments, 2, 1);
+            modifierArguments.splice(2, 1);
 
-            if (dessert.validators.isSetterGetterDescriptor(propertyDescriptor)) {
-                // property is setter-getter, ie. unresolved
-                propertyGetter = propertyDescriptor.get;
-                dessert.isFunction(propertyGetter, "Invalid postponed property");
-
-                // adding generator to amendment functions
-                amendments = propertyGetter.amendments = propertyGetter.amendments || [];
-                amendments.push({
-                    modifier: modifier,
-                    args    : modifierArguments
+            if (!propertyDescriptor) {
+                // there is no value nor setter-getter defined on property
+                // we're trying to amend before postponing
+                // postponing with dummy generator function
+                troop.postpone(host, propertyName, function () {
                 });
-            } else {
+
+                // re-evaluating property descriptor
+                propertyDescriptor = Object.getOwnPropertyDescriptor(host, propertyName);
+            }
+
+            if (validators.isSetterGetterDescriptor(propertyDescriptor)) {
+                // property is setter-getter, ie. unresolved
+                // adding generator to amendment functions
+                troop.AmendUtils.addAmendment(propertyDescriptor, modifier, modifierArguments);
+            } else if (propertyDescriptor) {
                 // property is value, assumed to be a resolved postponed property
 
                 // calling modifier immediately
-                modifier.apply(this, modifierArguments);
+                modifier.apply(troop, modifierArguments);
             }
         }
     });
@@ -209,13 +215,13 @@
 </div>
 
 <nav>
-    <h2><a href="index.html">Index</a></h2><h3>Classes</h3><ul><li><a href="troop.Base.html">Base</a></li><li><a href="troop.Feature.html">Feature</a></li><li><a href="troop.Properties.html">Properties</a></li></ul><h3>Namespaces</h3><ul><li><a href="troop.html">troop</a></li></ul>
+    <h2><a href="index.html">Index</a></h2><h3>Classes</h3><ul><li><a href="dessert.html">dessert</a></li><li><a href="troop.Base.html">Base</a></li><li><a href="troop.Feature.html">Feature</a></li><li><a href="troop.Properties.html">Properties</a></li></ul><h3>Namespaces</h3><ul><li><a href="troop.html">troop</a></li></ul>
 </nav>
 
 <br clear="both">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.2.0-dev</a> on Fri Dec 27 2013 18:43:56 GMT-0000 (GMT)
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.2.0-dev</a> on Thu Dec 04 2014 12:29:17 GMT-0000 (GMT)
 </footer>
 
 <script> prettyPrint(); </script>
